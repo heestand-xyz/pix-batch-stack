@@ -9,8 +9,6 @@ PixelKit.main.render.bits = ._16
 let args = CommandLine.arguments
 let fm = FileManager.default
 
-let batchGroupCount: Int = 16
-
 let callURL: URL = URL(fileURLWithPath: args[0])
 
 func getURL(_ path: String) -> URL {
@@ -24,13 +22,18 @@ func getURL(_ path: String) -> URL {
     return callURL.appendingPathComponent(path)
 }
 
-let argCount: Int = 3
+let argCount: Int = 4
 guard args.count == argCount + 1 else {
-    print("pix-batch-stack <resolution> <input-folder> <output-image>")
+    print("pix-batch-stack <count> <resolution> <input-folder> <output-folder>")
     exit(EXIT_FAILURE)
 }
 
-let resArg: String = args[1]
+guard let batchGroupCount: Int = Int( args[1]) else {
+    print("count format: \"10\"")
+    exit(EXIT_FAILURE)
+}
+
+let resArg: String = args[2]
 let resParts: [String] = resArg.components(separatedBy: "x")
 guard resParts.count == 2,
       let resWidth: Int = Int(resParts[0]),
@@ -40,23 +43,26 @@ guard resParts.count == 2,
 }
 let resolution: Resolution = .custom(w: resWidth, h: resHeight)
 
-let folderURL: URL = getURL(args[2])
-var folderIsDir: ObjCBool = false
-let folderExists: Bool = fm.fileExists(atPath: folderURL.path, isDirectory: &folderIsDir)
-guard folderExists && folderIsDir.boolValue else {
+let inputFolderURL: URL = getURL(args[3])
+var inputFolderIsDir: ObjCBool = false
+let inputFolderExists: Bool = fm.fileExists(atPath: inputFolderURL.path, isDirectory: &inputFolderIsDir)
+guard inputFolderExists && inputFolderIsDir.boolValue else {
     print("input needs to be a folder")
-    print(folderURL.path)
+    print(inputFolderURL.path)
     exit(EXIT_FAILURE)
 }
 
-let saveURL: URL = getURL(args[3])
-var saveIsDir: ObjCBool = false
-let saveExists: Bool = fm.fileExists(atPath: saveURL.path, isDirectory: &saveIsDir)
-let saveExtension: String = saveURL.pathExtension.lowercased()
-guard !saveIsDir.boolValue && ["png", "jpg"].contains(saveExtension) else {
-    print("output needs to be a .png or .jpg file")
-    print(saveURL.path)
-    exit(EXIT_FAILURE)
+let outputFolderURL: URL = getURL(args[4])
+var outputFolderIsDir: ObjCBool = false
+let outputFolderExists: Bool = fm.fileExists(atPath: outputFolderURL.path, isDirectory: &outputFolderIsDir)
+if outputFolderExists {
+    guard outputFolderIsDir.boolValue else {
+        print("output needs to be a folder")
+        print(outputFolderURL.path)
+        exit(EXIT_FAILURE)
+    }
+} else {
+    try! fm.createDirectory(at: outputFolderURL, withIntermediateDirectories: true, attributes: nil)
 }
 
 
@@ -69,6 +75,7 @@ func average(images: [NSImage]) -> NSImage {
     let blendsPix = BlendsPIX()
     blendsPix.blendMode = .avg
     blendsPix.inputs = [backgroundPix]
+    let finalPix = blendsPix//._gamma(0.75)
     let imagePixs: [ImagePIX] = images.map { image in
         let imagePix = ImagePIX()
         imagePix.image = image
@@ -80,7 +87,7 @@ func average(images: [NSImage]) -> NSImage {
     let group = DispatchGroup()
     group.enter()
     try! PixelKit.main.render.engine.manuallyRender {
-        guard let img: NSImage = blendsPix.renderedImage else {
+        guard let img: NSImage = finalPix.renderedImage else {
             print("average render failed")
             exit(EXIT_FAILURE)
         }
@@ -89,6 +96,7 @@ func average(images: [NSImage]) -> NSImage {
     }
     group.wait()
     print("average did render")
+    finalPix.destroy()
     blendsPix.destroy()
     imagePixs.forEach { imagePix in
         imagePix.destroy()
@@ -97,24 +105,19 @@ func average(images: [NSImage]) -> NSImage {
 }
 
 var groupImages: [NSImage] = []
-var averagedImages: [NSImage] = []
 
 // MARK: - Images
 
-let fileNames: [String] = try! fm.contentsOfDirectory(atPath: folderURL.path).sorted()
+let fileNames: [String] = try! fm.contentsOfDirectory(atPath: inputFolderURL.path).sorted()
 let count: Int = fileNames.count
+var index: Int = 0
 for (i, fileName) in fileNames.enumerated() {
 
     guard fileName != ".DS_Store" else { continue }
-    let fileURL: URL = folderURL.appendingPathComponent(fileName)
+    let fileURL: URL = inputFolderURL.appendingPathComponent(fileName)
     let fileExtension: String = fileURL.pathExtension.lowercased()
     guard ["png", "jpg", "tiff"].contains(fileExtension) else {
         print("\(i + 1)/\(count) non image \"\(fileName)\"")
-        continue
-    }
-    let saveFileExists: Bool = fm.fileExists(atPath: saveURL.path)
-    if saveFileExists {
-        print("\(i + 1)/\(count) skip \"\(fileName)\"")
         continue
     }
     
@@ -128,44 +131,27 @@ for (i, fileName) in fileNames.enumerated() {
     
     let atBatchGroupEnd: Bool = i % batchGroupCount == batchGroupCount - 1 || i == count - 1
     if atBatchGroupEnd {
+        
+        let saveURL = outputFolderURL.appendingPathComponent("stack_\(index).png")
+        
+        let saveFileExists: Bool = fm.fileExists(atPath: saveURL.path)
+        if saveFileExists {
+            print("\(i + 1)/\(count) skip \"\(fileName)\"")
+            groupImages = []
+            continue
+        }
+        
         let averagedImage: NSImage = average(images: groupImages)
-        averagedImages.append(averagedImage)
+        
+        let bitmap = NSBitmapImageRep(data: averagedImage.tiffRepresentation!)!
+        let data: Data = bitmap.representation(using: .png, properties: [:])!
+        try data.write(to: saveURL)
+        
         groupImages = []
+        index += 1
+
     }
 
 }
-
-let finalImage: NSImage = average(images: averagedImages)
-
-let finalImagePix = ImagePIX()
-finalImagePix.image = finalImage
-
-let finalPix: PIX & NODEOut = finalImagePix._gamma(0.5)
-
-// MARK: - Render
-
-print("will render")
-var outImg: NSImage!
-let group = DispatchGroup()
-group.enter()
-try! PixelKit.main.render.engine.manuallyRender {
-    guard let img: NSImage = finalPix.renderedImage else {
-        print("render failed")
-        exit(EXIT_FAILURE)
-    }
-    outImg = img
-    print("did render")
-    group.leave()
-}
-group.wait()
-
-let bitmap = NSBitmapImageRep(data: outImg.tiffRepresentation!)!
-var data: Data!
-if saveExtension == "png" {
-    data = bitmap.representation(using: .png, properties: [:])!
-} else if saveExtension == "jpg" {
-    data = bitmap.representation(using: .jpeg, properties: [.compressionFactor:0.8])!
-}
-try data.write(to: saveURL)
 
 print("done!")

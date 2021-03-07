@@ -52,7 +52,7 @@
       </BuildableProductRunnable>
       <CommandLineArguments>
          <CommandLineArgument
-            argument = "1000x1000 /Users/heestand-xyz/Desktop/DCIM/100NZ_50_CROP/C\ -\ 300mm /Users/heestand-xyz/Desktop/DCIM/100NZ_50_CROP/moon.png"
+            argument = "10 1000x1000 &quot;/Users/heestand-xyz/Desktop/DCIM/100NZ_50_CROP/C - 300mm 4&quot; &quot;/Users/heestand-xyz/Desktop/DCIM/100NZ_50_CROP/C - 300mm 5&quot;"
             isEnabled = "YES">
          </CommandLineArgument>
       </CommandLineArguments>
